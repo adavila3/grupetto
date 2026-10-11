@@ -49,7 +49,7 @@ for tid, (name, jiffies) in after.items():
     if tid in before:
         by_name[re.sub(r"[-#:]?\d+_?\d*$", "", name)] += jiffies - before[tid][1]
 total = sum(by_name.values())
-print(f"[{LABEL}] {dt:.0f}s  frames {frames} ({frames / dt:.1f}/s)  janky {janky.group(1) if janky else '?'}%  "
+print(f"[{LABEL}] {dt:.0f}s  frames {frames} ({frames / dt:.1f}/s)  janky {janky.group(1) if janky else '?'}% (unreliable headless)  "
       f"process CPU {100 * total / HZ / dt:.1f}% of one core")
 for name, jiffies in sorted(by_name.items(), key=lambda x: -x[1])[:6]:
     print(f"    {name:20s} {100 * jiffies / HZ / dt:5.1f}%")
@@ -65,7 +65,8 @@ for line in trace.splitlines():
     last = ts
     begin = re.search(r"B\|\d+\|(.+)$", line)
     if begin:
-        name = begin.group(1).strip()
+        # Android 13+ appends the vsync id ("Choreographer#doFrame 12345").
+        name = re.sub(r" \d+$", "", begin.group(1).strip())
         stack.append((name, ts))
         counts[name] += 1
     elif stack:
