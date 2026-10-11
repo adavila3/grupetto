@@ -8,6 +8,7 @@ import com.spop.poverlay.antplus.AntPlusServer
 import com.spop.poverlay.ble.BleServer
 import com.spop.poverlay.sensor.SensorSelection
 import com.spop.poverlay.sensor.interfaces.DummySensorInterface
+import com.spop.poverlay.sensor.interfaces.defaultSamplePeriodMs
 import com.spop.poverlay.sensor.interfaces.PelotonBikePlusSensorInterface
 import com.spop.poverlay.sensor.interfaces.PelotonBikeSensorInterfaceV1New
 import com.spop.poverlay.sensor.interfaces.PelotonTreadSensorInterface
@@ -64,7 +65,15 @@ class GrupettoApplication : Application() {
     }
 
     private fun createSensorInterface(): SensorInterface {
-        emulatedModel?.let { return com.spop.poverlay.sensor.interfaces.EmulatedSensorInterface(it) }
+        emulatedModel?.let { model ->
+            // Developer override for the emulated sample period, e.g. to replay a rate
+            // measured on hardware: <int name="emulatedSamplePeriodMs" value="..."/>.
+            val periodMs = getSharedPreferences("developer", MODE_PRIVATE)
+                .getInt("emulatedSamplePeriodMs", 0).takeIf { it > 0 }?.toLong()
+            return com.spop.poverlay.sensor.interfaces.EmulatedSensorInterface(
+                model, periodMs ?: model.defaultSamplePeriodMs
+            )
+        }
         // Detection is synchronous and reads Settings.Global["peloton_platform"], the
         // value affernetservice writes from the mainboard USB VID/PID ("prism" = Tread,
         // "titan" = Bike+, "caesar" = Row). The tablet model string is NOT usable: Bike+,
