@@ -1,6 +1,7 @@
 package com.spop.poverlay.calibration
 
 import android.os.Binder
+import android.os.IBinder
 import android.os.Parcel
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
@@ -63,6 +64,74 @@ class CalibrationAndroidTest {
         }
         CalibrationService(remote).use { service -> service.start(); assertEquals(31, service.readTable().size) }
         assertEquals(listOf(1, 11, 2), transactions)
+    }
+    /** Local Binder fixture only: never binds the tablet's sensor services. */
+    private inner class CallbackFixture : AutoCloseable {
+        private lateinit var callback: IBinder
+        private val remote = object : Binder() {
+            override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+                data.enforceInterface("com.onepeloton.affernetservice.IV1Interface")
+                check(code == 1 || code == 2)
+                callback = checkNotNull(data.readStrongBinder())
+                assertEquals("Grupetto calibration capture", data.readString())
+                reply!!.writeNoException()
+                return true
+            }
+        }
+        val service = CalibrationService(remote).also { it.start() }
+        fun deliver(code: Int, payload: Parcel.() -> Unit) {
+            val data = Parcel.obtain()
+            try {
+                data.writeInterfaceToken("com.onepeloton.affernetservice.IV1Callback")
+                data.payload()
+                assertTrue(callback.transact(code, data, null, IBinder.FLAG_ONEWAY))
+            } finally { data.recycle() }
+        }
+        fun sensorError(code: Long) = deliver(2) { writeLong(code) }
+        fun frame() = deliver(1) {
+            writeInt(1)
+            val frame = frameParcel()
+            try { appendFrom(frame, 0, frame.dataSize()) } finally { frame.recycle() }
+        }
+        override fun close() = service.close()
+    }
+    @Test fun startupZeroThenRealFrameKeepsCaptureHealthy() {
+        CallbackFixture().use {
+            it.sensorError(0L)
+            it.frame()
+            assertNull(it.service.failure)
+            assertEquals("TEST_FRAME_0001", it.service.frame?.frameSerial)
+            it.sensorError(0L)
+            assertNotNull(it.service.frame)
+        }
+    }
+    @Test fun fullWidthErrorAndCalibrationChangeRemainTerminal() {
+        CallbackFixture().use {
+            it.frame()
+            it.sensorError(1L shl 32)
+            assertNull(it.service.frame)
+            assertTrue(it.service.failure!!.contains("4294967296"))
+            it.sensorError(0L)
+            it.frame()
+            assertNull(it.service.frame)
+            assertNotNull(it.service.failure)
+        }
+        CallbackFixture().use {
+            it.frame()
+            it.deliver(3) { writeInt(0); writeInt(1); writeLong(0L) }
+            assertNull(it.service.frame)
+            assertTrue(it.service.failure!!.contains("calibration change"))
+        }
+    }
+    @Test fun queuedCallbacksAfterCloseCannotReviveCapture() {
+        CallbackFixture().use {
+            it.frame()
+            it.close()
+            it.frame()
+            it.sensorError(-1001L)
+            assertNull(it.service.frame)
+            assertNull(it.service.failure)
+        }
     }
     @Test fun atomicCaptureRoundTripsAndClearDoesNotTouchOtherFiles() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext

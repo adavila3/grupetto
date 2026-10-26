@@ -14,31 +14,51 @@ internal class CalibrationService(private val remote: IBinder) : AutoCloseable {
     @Volatile var failure: String? = null
         private set
     private var registered = false
+    private val callbackLock = Any()
+    private var closed = false
     private var lastDecodedAt = Long.MIN_VALUE
     private val callback = object : Binder() {
         override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
             if (code !in 1..3) return super.onTransact(code, data, reply, flags)
-            return try {
-                data.enforceInterface("com.onepeloton.affernetservice.IV1Callback")
-                if (code != 1) {
-                    frame = null
-                    failure = "Bike reported a sensor error or calibration change. Start a new capture."
-                } else {
-                    val now = SystemClock.elapsedRealtime()
-                    if (lastDecodedAt == Long.MIN_VALUE || now - lastDecodedAt >= 250) {
-                        lastDecodedAt = now
-                        frame = if (data.readInt() != 0) readCalibrationFrame(data, now) else null
+            return synchronized(callbackLock) {
+                // A queued/in-flight callback must not revive a stopped or failed capture.
+                if (closed || failure != null) return@synchronized true
+                try {
+                    data.enforceInterface("com.onepeloton.affernetservice.IV1Callback")
+                    when (code) {
+                        1 -> {
+                            val now = SystemClock.elapsedRealtime()
+                            if (lastDecodedAt == Long.MIN_VALUE || now - lastDecodedAt >= 250) {
+                                lastDecodedAt = now
+                                frame = if (data.readInt() != 0) readCalibrationFrame(data, now) else null
+                            }
+                        }
+                        2 -> {
+                            // Affernet emits onSensorError(0) when its V1 thread starts.
+                            val errorCode = data.readLong()
+                            if (errorCode != 0L) {
+                                frame = null
+                                failure = "Bike reported sensor error $errorCode. Start a new capture."
+                            }
+                        }
+                        3 -> {
+                            frame = null
+                            failure = "Bike reported a calibration change. Start a new capture."
+                        }
                     }
+                    true
+                } catch (e: Exception) {
+                    frame = null
+                    failure = "Bike calibration telemetry could not be decoded. Collection stopped."
+                    true
                 }
-                true
-            } catch (e: Exception) {
-                frame = null
-                failure = "Bike calibration telemetry could not be decoded. Collection stopped."
-                true
             }
         }
     }
+    @Synchronized
     fun start() {
+        synchronized(callbackLock) { check(!closed) { "Calibration service is closed" } }
+        if (registered) return
         registration(1)
         registered = true
     }
@@ -55,12 +75,16 @@ internal class CalibrationService(private val remote: IBinder) : AutoCloseable {
             reply.readException()
         } finally { data.recycle(); reply.recycle() }
     }
+    @Synchronized
     override fun close() {
+        synchronized(callbackLock) {
+            closed = true
+            frame = null
+        }
         if (registered) {
             registered = false
             registration(2)
         }
-        frame = null
     }
 }
 
