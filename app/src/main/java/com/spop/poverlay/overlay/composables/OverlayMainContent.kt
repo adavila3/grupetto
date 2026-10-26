@@ -66,10 +66,12 @@ fun OverlayMainContent(
         onMetricSelected: (MetricType) -> Unit,
         onSpeedUnitClicked: () -> Unit,
         onChartClicked: () -> Unit,
+        // Hoisted so the setting survives the content being dropped while minimized.
+        shrinkChart: Boolean,
+        onShrinkChartToggled: () -> Unit,
         powerComparison: String? = null,
         powerSourceLabel: String = if (powerComparison != null) "External" else "Power"
 ) {
-    var shrinkChart by remember { mutableStateOf(false) }
 
     val chartColor =
             when (selectedMetric) {
@@ -118,7 +120,7 @@ fun OverlayMainContent(
                         Modifier.pointerInput(Unit) {
                             detectTapGestures(
                                     onTap = { onChartClicked() },
-                                    onLongPress = { shrinkChart = !shrinkChart }
+                                    onLongPress = { onShrinkChartToggled() }
                             )
                         }
         ) {

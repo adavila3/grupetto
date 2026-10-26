@@ -74,6 +74,29 @@ class ExternalPowerSensorInterfaceTest {
             assertEquals(listOf(210f, 220f), watts)
         } finally { observers.cancel() }
     }
+    @Test fun withoutAFreshMeterReadingBikeWattsAreNotRepeated() = fixture { sensor ->
+        val watts = mutableListOf<Float>()
+        val observers = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            observers.launch { sensor.power.collect { watts.add(it) } }
+            // Longer than one 900 ms display bucket.
+            delay(1200)
+            assertEquals(listOf(145f), watts)
+            // A stale reading falls back once, then the staleness check stops.
+            readings.value = ExternalPowerReading(210, now, "meter")
+            now += 3001
+            delay(700)
+            assertEquals(listOf(145f, 210f, 145f), watts)
+        } finally { observers.cancel() }
+    }
+    @Test fun aNewSubscriberNeverSeesMeterWattsFromBeforeADisconnect() = fixture { sensor ->
+        readings.value = ExternalPowerReading(210, now, "meter")
+        assertEquals(210f, sensor.power.first())
+        // Every subscriber has left; the meter disconnects before the next one arrives.
+        readings.value = null
+        assertEquals(145f, sensor.power.first())
+        assertFalse(sensor.usesExternalPower.first())
+    }
     @Test fun sourceChangesReachTheSharedErgController() = fixture { sensor ->
         bike.bikeControl.acceptSample(BikeSample(145f, 80f, 40, now))
         assertTrue(bike.bikeControl.localErg(200))

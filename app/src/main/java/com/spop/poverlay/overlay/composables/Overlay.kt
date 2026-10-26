@@ -167,16 +167,17 @@ fun Overlay(
         animationSpec = TweenSpec(VisibilityChangeDurationMs, 0, LinearEasing)
     )
 
+    val targetVisibilityOffset = if (minimized) {
+        when (location) {
+            // When the main content is hidden, move it off screen completely
+            OverlayLocation.Top -> IntOffset(0, -mainContentHeight)
+            OverlayLocation.Bottom -> IntOffset(0, mainContentHeight)
+        }
+    } else {
+        IntOffset.Zero
+    }
     val visibilityOffset by animateIntOffsetAsState(
-        if (minimized) {
-            when (location) {
-                // When the main content is hidden, move it off screen completely
-                OverlayLocation.Top -> IntOffset(0, -mainContentHeight)
-                OverlayLocation.Bottom -> IntOffset(0, mainContentHeight)
-            }
-        } else {
-            IntOffset.Zero
-        },
+        targetVisibilityOffset,
         animationSpec = TweenSpec(VisibilityChangeDurationMs, 0, LinearEasing),
         finishedListener = {
             isCurrentlyAnimating = false
@@ -233,88 +234,111 @@ fun Overlay(
             emulationLabel = sensorViewModel.emulatedModel
         )
     }
+    // Once the minimize slide has finished, the main content is fully off screen. Composing it
+    // there still recomposed every stat card and rebuilt the chart twice a second for nothing,
+    // so a same-sized placeholder stands in until the overlay is expanded again.
+    // Keyed on the offset reaching its target, not on isCurrentlyAnimating, which can stay set
+    // if a toggle never starts an animation.
+    val mainContentHidden = minimized &&
+        targetVisibilityOffset != IntOffset.Zero && visibilityOffset == targetVisibilityOffset
+    var shrinkChart by remember { mutableStateOf(false) }
+    val reportMainContentSize = Modifier.onSizeChanged {
+        if (it.width != size.value.width || it.height != size.value.height) {
+            size.value = it
+            onLayout(size.value)
+        }
+    }
     val mainContent = @Composable {
-        Box(modifier = Modifier
-            .requiredHeight(contentHeight)
-            .wrapContentWidth(unbounded = true)
-            .onSizeChanged {
-                if (it.width != size.value.width || it.height != size.value.height) {
-                    size.value = it
-                    onLayout(size.value)
-                }
-            }
-            .background(
-                color = BackgroundColorDefault,
-                shape = backgroundShape,
-            )
-            .pointerInput(Unit) {
-                detectDragGestures(onDrag = { _, offset ->
-                    horizontalDragCallback(offset.x)
-
-                    verticalDragOffset += offset.y
-                    verticalDragOffset = verticalDragCallback(verticalDragOffset)
-                }, onDragEnd = {
-                    verticalDragOffset = 0f
-                    onDragFinished()
-                }, onDragCancel = {
-                    verticalDragOffset = 0f
-                    onDragFinished()
-                })
-            }) {
-
-
-            val rowAlignment = when (location) {
-                OverlayLocation.Top -> Alignment.Top
-                OverlayLocation.Bottom -> Alignment.Bottom
-            }
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-            OverlayMainContent(
+        if (mainContentHidden) {
+            val hiddenWidth = with(LocalDensity.current) { size.value.width.toDp() }
+            Spacer(
                 modifier = Modifier
-                    .wrapContentWidth(unbounded = true)
-                    .padding(horizontal = 9.dp)
-                    .padding(bottom = 5.dp),
-                rowAlignment = rowAlignment,
-                isTread = isTread,
-                power = power,
-                powerComparison = powerComparison,
-                powerSourceLabel = powerSource,
-                rpm = rpm,
-                pauseChart = isCurrentlyAnimating,
-                currentGraph = currentGraph,
-                selectedMetric = selectedMetric,
-                resistance = resistance,
-                speed = speed,
-                speedLabel = speedLabel,
-                heartRate = heartRate?.toString() ?: SensorValuePlaceholderText,
-                heartRateColor = heartRateColor,
-                heartRateZoneBands = heartRateZoneBands,
-                calories = calories,
-                maxPower = "%.0f".format(maxPower),
-                maxCadence = "%.0f".format(maxCadence),
-                maxResistance = "%.0f".format(maxResistance),
-                maxSpeed = "%.1f".format(maxSpeed),
-                maxPowerValue = maxPower,
-                maxCadenceValue = maxCadence,
-                maxResistanceValue = maxResistance,
-                maxSpeedValue = maxSpeed,
-                totalEnergy = "%.0f".format(totalEnergy),
-                totalDistance = if (speedLabel == "mph") "%.2f".format(totalDistance) else "%.2f".format(totalDistance * 1.60934f),
-                distanceUnit = if (speedLabel == "mph") "mi" else "km",
-                avgCadence = "%.0f".format(avgCadence),
-                avgResistance = "%.0f".format(avgResistance),
-                maxHeartRate = "%.0f".format(maxHeartRate),
-                avgHeartRate = "%.0f".format(avgHeartRate),
-                showHeartRateCard = showHeartRateCard,
-                incline = incline,
-                showInclineCard = showInclineCard,
-                showPowerCard = showPowerCard,
-                showCadenceCard = showCadenceCard,
-                showResistanceCard = showResistanceCard,
-                onMetricSelected = { sensorViewModel.onMetricSelected(it) },
-                onSpeedUnitClicked = { sensorViewModel.onClickedSpeedUnit() },
-                onChartClicked = { sensorViewModel.onOverlayPressed() }
+                    .requiredHeight(contentHeight)
+                    .requiredWidth(hiddenWidth)
+                    .then(reportMainContentSize)
             )
+        } else {
+            Box(modifier = Modifier
+                .requiredHeight(contentHeight)
+                .wrapContentWidth(unbounded = true)
+                .then(reportMainContentSize)
+                .background(
+                    color = BackgroundColorDefault,
+                    shape = backgroundShape,
+                )
+                .pointerInput(Unit) {
+                    detectDragGestures(onDrag = { _, offset ->
+                        horizontalDragCallback(offset.x)
+
+                        verticalDragOffset += offset.y
+                        verticalDragOffset = verticalDragCallback(verticalDragOffset)
+                    }, onDragEnd = {
+                        verticalDragOffset = 0f
+                        onDragFinished()
+                    }, onDragCancel = {
+                        verticalDragOffset = 0f
+                        onDragFinished()
+                    })
+                }) {
+
+
+                val rowAlignment = when (location) {
+                    OverlayLocation.Top -> Alignment.Top
+                    OverlayLocation.Bottom -> Alignment.Bottom
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                OverlayMainContent(
+                    modifier = Modifier
+                        .wrapContentWidth(unbounded = true)
+                        .padding(horizontal = 9.dp)
+                        .padding(bottom = 5.dp),
+                    rowAlignment = rowAlignment,
+                    isTread = isTread,
+                    power = power,
+                    powerComparison = powerComparison,
+                    powerSourceLabel = powerSource,
+                    rpm = rpm,
+                    pauseChart = isCurrentlyAnimating,
+                    currentGraph = currentGraph,
+                    selectedMetric = selectedMetric,
+                    resistance = resistance,
+                    speed = speed,
+                    speedLabel = speedLabel,
+                    heartRate = heartRate?.toString() ?: SensorValuePlaceholderText,
+                    heartRateColor = heartRateColor,
+                    heartRateZoneBands = heartRateZoneBands,
+                    calories = calories,
+                    maxPower = remember(maxPower) { "%.0f".format(maxPower) },
+                    maxCadence = remember(maxCadence) { "%.0f".format(maxCadence) },
+                    maxResistance = remember(maxResistance) { "%.0f".format(maxResistance) },
+                    maxSpeed = remember(maxSpeed) { "%.1f".format(maxSpeed) },
+                    maxPowerValue = maxPower,
+                    maxCadenceValue = maxCadence,
+                    maxResistanceValue = maxResistance,
+                    maxSpeedValue = maxSpeed,
+                    totalEnergy = remember(totalEnergy) { "%.0f".format(totalEnergy) },
+                    totalDistance = remember(totalDistance, speedLabel) {
+                        if (speedLabel == "mph") "%.2f".format(totalDistance) else "%.2f".format(totalDistance * 1.60934f)
+                    },
+                    distanceUnit = if (speedLabel == "mph") "mi" else "km",
+                    avgCadence = remember(avgCadence) { "%.0f".format(avgCadence) },
+                    avgResistance = remember(avgResistance) { "%.0f".format(avgResistance) },
+                    maxHeartRate = remember(maxHeartRate) { "%.0f".format(maxHeartRate) },
+                    avgHeartRate = remember(avgHeartRate) { "%.0f".format(avgHeartRate) },
+                    showHeartRateCard = showHeartRateCard,
+                    incline = incline,
+                    showInclineCard = showInclineCard,
+                    showPowerCard = showPowerCard,
+                    showCadenceCard = showCadenceCard,
+                    showResistanceCard = showResistanceCard,
+                    onMetricSelected = { sensorViewModel.onMetricSelected(it) },
+                    onSpeedUnitClicked = { sensorViewModel.onClickedSpeedUnit() },
+                    onChartClicked = { sensorViewModel.onOverlayPressed() },
+                    shrinkChart = shrinkChart,
+                    onShrinkChartToggled = { shrinkChart = !shrinkChart }
+                )
+                }
             }
         }
     }
