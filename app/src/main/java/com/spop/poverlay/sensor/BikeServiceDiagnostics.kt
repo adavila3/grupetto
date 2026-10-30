@@ -14,9 +14,13 @@ import kotlinx.coroutines.withContext
 internal class BikeServiceDiagnostics(
     private val context: Context,
     private val log: (String) -> Unit = { Log.i("BikeServices", it) },
+    private val warnLog: (String) -> Unit = { Log.w("BikeServices", it) },
     private val runCommand: suspend (List<String>) -> String = ::readDiagnosticCommand,
 ) {
     fun record(message: String) = log(message)
+
+    /** Connection losses and retries. Peloton builds set log.tag=W, which hides info lines. */
+    fun warn(message: String) = warnLog(message)
 
     suspend fun capture(reason: String) {
         log("$reason; serialOwner=unverified")

@@ -1,12 +1,14 @@
 package com.spop.poverlay.sensor.interfaces
 
 import android.content.Context
+import android.util.Log
+import com.spop.poverlay.sensor.BikeServiceLostException
+import com.spop.poverlay.sensor.reconnectingFlow
 import com.spop.poverlay.sensor.v2.BikePlusCombinedSensor
 import com.spop.poverlay.sensor.v2.getV2Binder
 import com.spop.poverlay.util.windowed
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.shareIn
@@ -45,7 +47,10 @@ class PelotonBikePlusSensorInterface(val context: Context, controlSupported: Boo
         job.cancel()
     }
 
-    private val combinedSensorState = flow {
+    // Reconnects whenever the session ends, so a crashed or updated bike service is picked up
+    // again without restarting Grupetto.
+    private val combinedSensorState = reconnectingFlow<BikePlusCombinedSensor>({ Log.w("BikeServices", it) }) {
+        var delivered = false
         try {
             val binding = getV2Binder(context)
             try {
@@ -54,7 +59,8 @@ class PelotonBikePlusSensorInterface(val context: Context, controlSupported: Boo
                 try {
                     sensor.start()
                     emit(sensor)
-                    awaitCancellation()
+                    delivered = true
+                    throw BikeServiceLostException(binding.awaitLoss())
                 } finally {
                     activeSensor = null
                     sensor.stop()
@@ -65,8 +71,9 @@ class PelotonBikePlusSensorInterface(val context: Context, controlSupported: Boo
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Timber.w(e, "Failed to connect to bike sensor service")
+            Timber.w(e, "Bike sensor service connection ended")
         }
+        delivered
     }.shareIn(this, SharingStarted.Lazily, 1)
     override val power: Flow<Float>
         get() = combinedSensorState.flatMapLatest { it.power }
